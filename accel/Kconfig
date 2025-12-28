@@ -18,3 +18,6 @@ config XEN
     select FSDEV_9P if VIRTFS
     select PCI_EXPRESS_GENERIC_BRIDGE
     select XEN_BUS
+
+config PARASYTE
+    bool

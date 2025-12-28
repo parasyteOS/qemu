@@ -327,7 +327,8 @@ accelerator_targets += { 'CONFIG_XEN': xen_targets }
 
 if cpu == 'aarch64'
   accelerator_targets += {
-    'CONFIG_HVF': ['aarch64-softmmu']
+    'CONFIG_HVF': ['aarch64-softmmu'],
+    'CONFIG_PARASYTE': ['aarch64-softmmu']
   }
 elif cpu == 'x86_64'
   accelerator_targets += {
@@ -893,6 +894,10 @@ if get_option('whpx').allowed() and host_os == 'windows'
   endif
 endif
 
+if get_option('parasyte').allowed() and host_os == 'linux'
+  accelerators += 'CONFIG_PARASYTE'
+endif
+
 hvf = not_found
 if get_option('hvf').allowed()
   hvf = dependency('appleframeworks', modules: 'Hypervisor',
@@ -952,6 +957,9 @@ if 'CONFIG_NVMM' not in accelerators and get_option('nvmm').enabled()
 endif
 if 'CONFIG_WHPX' not in accelerators and get_option('whpx').enabled()
   error('WHPX not available on this platform')
+endif
+if 'CONFIG_PARASYTE' not in accelerators and get_option('parasyte').enabled()
+  error('PARASYTE not available on this platform')
 endif
 
 xen = not_found
@@ -4821,6 +4829,7 @@ if have_system
   summary_info += {'HVF support':       config_all_accel.has_key('CONFIG_HVF')}
   summary_info += {'WHPX support':      config_all_accel.has_key('CONFIG_WHPX')}
   summary_info += {'NVMM support':      config_all_accel.has_key('CONFIG_NVMM')}
+  summary_info += {'Parasyte support':  config_all_accel.has_key('CONFIG_PARASYTE')}
   summary_info += {'Xen support':       xen.found()}
   if xen.found()
     summary_info += {'xen ctrl version':  xen.version()}
