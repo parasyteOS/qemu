@@ -166,9 +166,66 @@ static void copy_node_by_offset(void *host_fdt, void *fdt, int host_offset, int 
         fatal_report("Failed to find next subnode: %s", fdt_strerror(subnode));
 }
 
+static int fdt_path_offset_exact(const void *fdt, const char *path)
+{
+    const char *p = path;
+    int offset = 0;
+
+    if (!path || path[0] != '/')
+        return -FDT_ERR_BADPATH;
+
+    /* Root node */
+    if (path[1] == '\0')
+        return 0;
+
+    while (*p == '/')
+        p++;
+
+    while (*p) {
+        const char *end;
+        int len;
+        int child;
+        int found = 0;
+
+        end = p;
+        while (*end && *end != '/')
+            end++;
+
+        len = end - p;
+
+        fdt_for_each_subnode(child, fdt, offset) {
+            int nlen;
+            const char *name = fdt_get_name(fdt, child, &nlen);
+
+            if (!name)
+                continue;
+
+            /*
+             * Exact full-name match:
+             * "serial@1000" != "serial@2000"
+             * "serial"      != "serial@1000"
+             */
+            if (nlen == len && !memcmp(name, p, len)) {
+                offset = child;
+                found = 1;
+                break;
+            }
+        }
+
+        if (!found)
+            return -FDT_ERR_NOTFOUND;
+
+        p = end;
+        while (*p == '/')
+            p++;
+    }
+
+    return offset;
+}
+
 static void copy_node(void *host_fdt, void *fdt, const char *node_path, bool recursive, bool optional)
 {
-    int host_offset = fdt_path_offset(host_fdt, node_path);
+    int host_offset = fdt_path_offset_exact(host_fdt, node_path);
     if (host_offset < 0) {
         if (optional) {
             warn_report("No such node path, skip: %s", node_path);
@@ -303,7 +360,7 @@ static void setup_cpus_node(HyphaMachineState *hms, void *host_fdt)
         if (len < 0) fatal_report("Failed to read %s", cpu_path);
     }
 
-    cpus = fdt_path_offset(host_fdt, "/cpus");
+    cpus = fdt_path_offset_exact(host_fdt, "/cpus");
     fdt_for_each_subnode(cpu, host_fdt, cpus) {
         device_type = (const char *)fdt_getprop(host_fdt, cpu, "device_type", NULL);
         if (device_type && !strcmp("cpu", device_type)) {
