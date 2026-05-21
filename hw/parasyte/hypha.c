@@ -403,12 +403,12 @@ static void copy_host_fdt_properties(HyphaMachineState *hms, void *host_fdt)
     void *fdt = MACHINE(hms)->fdt;
     const char *psci_compat[] = { "arm,psci-1.0", "arm,psci-0.2", "arm,psci" };
     const char *timer_compat[] = { "arm,armv8-timer", "arm,armv7-timer" };
-    const char *timer_mem_compat[] = { "arm,armv8-timer-mem", "arm,armv7-timer-mem" };
+    // const char *timer_mem_compat[] = { "arm,armv8-timer-mem", "arm,armv7-timer-mem" };
     copy_basic_properties(hms, host_fdt);
     copy_node(host_fdt, fdt, "/soc", false, true);
     copy_node_compat(host_fdt, fdt, psci_compat, 3, true, false);
     copy_node_compat(host_fdt, fdt, timer_compat, 2, true, false);
-    copy_node_compat(host_fdt, fdt, timer_mem_compat, 2, true, true);
+    // copy_node_compat(host_fdt, fdt, timer_mem_compat, 2, true, true);
     setup_gic_node(hms, host_fdt);
     setup_cpus_node(hms, host_fdt);
 }
