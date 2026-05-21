@@ -107,6 +107,7 @@ DECLARE_INSTANCE_CHECKER(ParasyteState, PARASYTE_STATE, TYPE_PARASYTE_ACCEL)
 
 /* Qemu API */
 void parasyte_alloc(ParasyteState* ps, char *cpus, uint64_t ram_size, uint64_t queue_size);
+int parasyte_ram_fd(ParasyteState* ps);
 void *parasyte_ram_ptr(ParasyteState* ps);
 MemMapEntry *parasyte_ram_entry(ParasyteState* ps);
 MemMapEntry *parasyte_hive_queue_entry(ParasyteState* ps);

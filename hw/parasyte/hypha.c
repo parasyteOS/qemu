@@ -487,8 +487,9 @@ static void hypha_init_ram(HyphaMachineState *hms,
                            MemoryRegion *sysmem)
 {
     MemMapEntry *ram_entry = parasyte_ram_entry(ps);
-    void *ram_ptr = parasyte_ram_ptr(ps);
-    memory_region_init_ram_ptr(&hms->ram, NULL, "parasyte.ram", ram_entry->size, ram_ptr);
+    int ram_fd = parasyte_ram_fd(ps);
+    memory_region_init_ram_from_fd(&hms->ram, NULL, "parasyte.ram", ram_entry->size,
+                                   RAM_SHARED, ram_fd, 0, &error_fatal);
     memory_region_add_subregion(sysmem, ram_entry->base, &hms->ram);
     create_memory_node(hms, ps);
 }

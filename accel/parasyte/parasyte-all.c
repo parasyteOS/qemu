@@ -29,8 +29,11 @@ struct ParasyteState {
     AccelState parent_obj;
     int dev_fd;
 
+    int hb_fd;
     void *hb;
+    int ram_fd;
     void *ram;
+    int fdt_fd;
     void *fdt;
     __u64 fdt_size;
     MemMapEntry ram_entry;
@@ -349,17 +352,21 @@ void parasyte_alloc(ParasyteState* ps, char *cpus, uint64_t ram_size, uint64_t q
         exit(1);
     }
 
+    ps->hb_fd = alloc_params.hb_fd;
     ps->hb = mmap(NULL, alloc_params.hb_size, PROT_READ|PROT_WRITE, MAP_SHARED, alloc_params.hb_fd, 0);
     if (ps->hb == MAP_FAILED) {
         error_report("Mmap hb failed: %d", errno);
         exit(1);
     }
+
+    ps->ram_fd = alloc_params.ram_fd;
     ps->ram = mmap(NULL, ram_size, PROT_READ|PROT_WRITE, MAP_SHARED, alloc_params.ram_fd, 0);
     if (ps->ram == MAP_FAILED) {
         error_report("Mmap ram failed: %d", errno);
         exit(1);
     }
 
+    ps->fdt_fd = alloc_params.fdt_fd;
     ps->fdt = mmap(NULL, alloc_params.fdt_size, PROT_READ|PROT_WRITE, MAP_SHARED, alloc_params.fdt_fd, 0);
     if (ps->fdt == MAP_FAILED) {
         error_report("Mmap fdt failed: %d", errno);
@@ -399,6 +406,11 @@ MemMapEntry *parasyte_ram_entry(ParasyteState* ps)
 void *parasyte_ram_ptr(ParasyteState* ps)
 {
     return ps->ram;
+}
+
+int parasyte_ram_fd(ParasyteState* ps)
+{
+    return ps->ram_fd;
 }
 
 MemMapEntry *parasyte_hive_queue_entry(ParasyteState* ps)
