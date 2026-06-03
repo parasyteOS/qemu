@@ -39,6 +39,7 @@ struct ParasyteState {
     MemMapEntry ram_entry;
     MemMapEntry hive_queue_entry;
     MemMapEntry spore_queue_entry;
+    MemMapEntry flags_entry;
     __u64 kimage_offset;
 
     struct parasyte_msg_queue *consuming_queue;
@@ -254,6 +255,7 @@ static void parasyte_setup_post(AccelState *as)
     ParasyteState *ps = PARASYTE_STATE(as);
     struct parasyte_setup_params setup_params = {
         .kimage_offset = ps->kimage_offset,
+        .flags_offset = ps->flags_entry.base - ps->ram_entry.base,
         .hive_queue_offset = ps->hive_queue_entry.base - ps->ram_entry.base,
         .spore_queue_offset = ps->spore_queue_entry.base - ps->ram_entry.base,
     };
@@ -393,6 +395,9 @@ void parasyte_alloc(ParasyteState* ps, char *cpus, uint64_t ram_size, uint64_t q
     qatomic_set(&ps->consuming_queue->tail, 0);
     qatomic_set(&ps->consuming_queue->capacity, queue_capacity);
 
+    ps->flags_entry.base = ps->spore_queue_entry.base + ps->spore_queue_entry.size;
+    ps->flags_entry.size = sizeof(__u64);
+
 #define SZ_2M   0x00200000
     kimage_addr = ROUND_UP(ps->spore_queue_entry.base + ps->spore_queue_entry.size, SZ_2M);
     ps->kimage_offset = kimage_addr - ps->ram_entry.base;
@@ -421,6 +426,11 @@ MemMapEntry *parasyte_hive_queue_entry(ParasyteState* ps)
 MemMapEntry *parasyte_spore_queue_entry(ParasyteState* ps)
 {
     return &ps->spore_queue_entry;
+}
+
+MemMapEntry *parasyte_flags_entry(ParasyteState* ps)
+{
+    return &ps->flags_entry;
 }
 
 void *parasyte_fdt_ptr(ParasyteState *ps)

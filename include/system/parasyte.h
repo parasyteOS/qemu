@@ -19,6 +19,9 @@
 #define PARASYTE_MSG_STATUS_SHUTDOWN    (1 << 0)
 #define PARASYTE_MSG_STATUS_PENDING     (1 << 1)
 
+#define PARASYTE_FLAGS_SHUTDOWN_REQ    (1 << 0)
+#define PARASYTE_FLAGS_SHUTDOWN_ACK    (1 << 1)
+
 #define PARASYTE_HIVE_ANY_CPU           (UINT32_MAX)
 
 struct parasyte_io_request {
@@ -74,6 +77,7 @@ struct parasyte_alloc_params {
 
 struct parasyte_setup_params {
 	__u64 kimage_offset;
+	__u64 flags_offset;
 	__u64 hive_queue_offset;
 	__u64 spore_queue_offset;
 };
@@ -112,6 +116,7 @@ void *parasyte_ram_ptr(ParasyteState* ps);
 MemMapEntry *parasyte_ram_entry(ParasyteState* ps);
 MemMapEntry *parasyte_hive_queue_entry(ParasyteState* ps);
 MemMapEntry *parasyte_spore_queue_entry(ParasyteState* ps);
+MemMapEntry *parasyte_flags_entry(ParasyteState* ps);
 void *parasyte_fdt_ptr(ParasyteState *ps);
 size_t parasyte_fdt_size(ParasyteState *ps);
 hwaddr parasyte_kimage_offset(ParasyteState *ps);

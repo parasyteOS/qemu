@@ -419,6 +419,7 @@ static void create_memory_node(HyphaMachineState *hms, ParasyteState *ps)
     MemMapEntry *ram_entry = parasyte_ram_entry(ps);
     MemMapEntry *hive_queue_entry = parasyte_hive_queue_entry(ps);
     MemMapEntry *spore_queue_entry = parasyte_spore_queue_entry(ps);
+    MemMapEntry *flags_entry = parasyte_flags_entry(ps);
 
     char *node_path = g_strdup_printf("/memory@%lx", ram_entry->base);
     qemu_fdt_add_path(fdt, node_path);
@@ -441,6 +442,12 @@ static void create_memory_node(HyphaMachineState *hms, ParasyteState *ps)
     qemu_fdt_add_path(fdt, node_path);
     qemu_fdt_setprop_sized_cells(fdt, node_path, "reg", 2, spore_queue_entry->base, 2, spore_queue_entry->size);
     qemu_fdt_setprop_string(fdt, node_path, "compatible", "parasyte,msg-queue-spore");
+    g_free(node_path);
+
+    node_path = g_strdup_printf("/reserved-memory/flags@%lx", flags_entry->base);
+    qemu_fdt_add_path(fdt, node_path);
+    qemu_fdt_setprop_sized_cells(fdt, node_path, "reg", 2, flags_entry->base, 2, flags_entry->size);
+    qemu_fdt_setprop_string(fdt, node_path, "compatible", "parasyte,flags");
     g_free(node_path);
 }
 
