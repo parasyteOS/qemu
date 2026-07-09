@@ -208,13 +208,37 @@ static uint64_t virtio_mmio_read(void *opaque, hwaddr offset, unsigned size)
         }
         return vdev->generation;
    case VIRTIO_MMIO_SHM_LEN_LOW:
-   case VIRTIO_MMIO_SHM_LEN_HIGH:
+   case VIRTIO_MMIO_SHM_LEN_HIGH: {
         /*
-         * VIRTIO_MMIO_SHM_SEL is unimplemented
-         * according to the linux driver, if region length is -1
-         * the shared memory doesn't exist
+         * If the selected region does not exist (no get_shm_region vfunc or
+         * unknown id) the linux driver expects a length of -1.
          */
-        return -1;
+        VirtioDeviceClass *vdc = VIRTIO_DEVICE_GET_CLASS(vdev);
+        struct virtio_shm_region region;
+
+        if (!vdc->get_shm_region ||
+            !vdc->get_shm_region(vdev, proxy->shm_sel, &region)) {
+            return -1;
+        }
+        if (offset == VIRTIO_MMIO_SHM_LEN_LOW) {
+            return region.len;
+        }
+        return region.len >> 32;
+    }
+    case VIRTIO_MMIO_SHM_BASE_LOW:
+    case VIRTIO_MMIO_SHM_BASE_HIGH: {
+        VirtioDeviceClass *vdc = VIRTIO_DEVICE_GET_CLASS(vdev);
+        struct virtio_shm_region region;
+
+        if (!vdc->get_shm_region ||
+            !vdc->get_shm_region(vdev, proxy->shm_sel, &region)) {
+            return -1;
+        }
+        if (offset == VIRTIO_MMIO_SHM_BASE_LOW) {
+            return region.addr;
+        }
+        return region.addr >> 32;
+    }
     case VIRTIO_MMIO_DEVICE_FEATURES_SEL:
     case VIRTIO_MMIO_DRIVER_FEATURES:
     case VIRTIO_MMIO_DRIVER_FEATURES_SEL:
@@ -347,6 +371,9 @@ static void virtio_mmio_write(void *opaque, hwaddr offset, uint64_t value,
         if (value < VIRTIO_QUEUE_MAX) {
             vdev->queue_sel = value;
         }
+        break;
+    case VIRTIO_MMIO_SHM_SEL:
+        proxy->shm_sel = value;
         break;
     case VIRTIO_MMIO_QUEUE_NUM:
         trace_virtio_mmio_queue_write(value, VIRTQUEUE_MAX_SIZE);

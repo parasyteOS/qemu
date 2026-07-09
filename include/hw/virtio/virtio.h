@@ -38,6 +38,11 @@
 
 struct VirtQueue;
 
+struct virtio_shm_region {
+    uint64_t addr;
+    uint64_t len;
+};
+
 static inline hwaddr vring_align(hwaddr addr,
                                              unsigned long align)
 {
@@ -234,6 +239,13 @@ struct VirtioDeviceClass {
     /* May be called even when vdev->vhost_started is false */
     struct vhost_dev *(*get_vhost)(VirtIODevice *vdev);
     void (*toggle_device_iotlb)(VirtIODevice *vdev);
+    /*
+     * Return the guest-physical location of a virtio SHM region by id.
+     * Used by the mmio/pci transports to answer SHM region queries.
+     * Returns true and fills *region on success.
+     */
+    bool (*get_shm_region)(VirtIODevice *vdev, uint8_t id,
+                           struct virtio_shm_region *region);
 };
 
 void virtio_instance_init_common(Object *proxy_obj, void *data,

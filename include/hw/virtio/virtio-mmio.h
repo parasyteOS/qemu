@@ -70,6 +70,8 @@ struct VirtIOMMIOProxy {
     /* Fields only used for non-legacy (v2) devices */
     uint32_t guest_features[2];
     VirtIOMMIOQueue vqs[VIRTIO_QUEUE_MAX];
+    /* Selected virtio SHM region (VIRTIO_MMIO_SHM_SEL) */
+    uint32_t shm_sel;
 };
 
 #endif

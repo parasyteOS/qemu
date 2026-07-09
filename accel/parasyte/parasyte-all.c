@@ -36,6 +36,9 @@ struct ParasyteState {
     int fdt_fd;
     void *fdt;
     __u64 fdt_size;
+    int hostvis_fd;
+    __u64 hostvis_paddr;
+    __u64 hostvis_size;
     MemMapEntry ram_entry;
     MemMapEntry hive_queue_entry;
     MemMapEntry spore_queue_entry;
@@ -345,6 +348,7 @@ void parasyte_alloc(ParasyteState* ps, char *cpus, uint64_t ram_size, uint64_t q
         .cpus = cpus,
         .cpus_len = strlen(cpus) + 1,
         .ram_size = ram_size,
+        .hostvis_size = PARASYTE_HOSTVIS_SIZE,
     };
     int ret;
 
@@ -375,6 +379,10 @@ void parasyte_alloc(ParasyteState* ps, char *cpus, uint64_t ram_size, uint64_t q
         exit(1);
     }
     ps->fdt_size = alloc_params.fdt_size;
+
+    ps->hostvis_fd = alloc_params.hostvis_fd;
+    ps->hostvis_paddr = alloc_params.hostvis_paddr;
+    ps->hostvis_size = alloc_params.hostvis_size;
 
     ps->ram_entry.base = alloc_params.ram_paddr;
     ps->ram_entry.size = ram_size;
@@ -416,6 +424,85 @@ void *parasyte_ram_ptr(ParasyteState* ps)
 int parasyte_ram_fd(ParasyteState* ps)
 {
     return ps->ram_fd;
+}
+
+int parasyte_hostvis_fd(ParasyteState* ps)
+{
+    return ps->hostvis_fd;
+}
+
+uint64_t parasyte_hostvis_paddr(ParasyteState* ps)
+{
+    return ps->hostvis_paddr;
+}
+
+uint64_t parasyte_hostvis_size(ParasyteState* ps)
+{
+    return ps->hostvis_size;
+}
+
+/*
+ * If parasyte is the active accelerator and a host-visible window was
+ * allocated, fill *base/*len with its guest-physical location and return true.
+ * Used by the virtio-gpu device to answer VIRTIO_GPU_SHM_ID_HOST_VISIBLE.
+ */
+bool parasyte_get_hostvis_region(uint64_t *base, uint64_t *len)
+{
+    AccelState *accel = current_accel();
+    ParasyteState *ps;
+
+    if (!accel || !object_dynamic_cast(OBJECT(accel), TYPE_PARASYTE_ACCEL)) {
+        return false;
+    }
+    ps = PARASYTE_STATE(accel);
+    if (!ps->hostvis_size) {
+        return false;
+    }
+    *base = ps->hostvis_paddr;
+    *len = ps->hostvis_size;
+    return true;
+}
+
+/*
+ * Export a page-aligned [offset, offset+size) sub-range of the host-visible
+ * window as a dma-buf, by issuing PARASYTE_MEM_IOCTL_EXPORT_DMABUF on the
+ * window fd (owned by this privileged VMM process). Returns an owned dma-buf fd
+ * (O_CLOEXEC) or -1. This keeps all parasyte-device access in QEMU so the
+ * vhost-user-gpu backend (virgil, in the unprivileged lens process) never needs
+ * the parasyte device.
+ */
+int parasyte_hostvis_export_dmabuf(uint64_t offset, uint64_t size)
+{
+    AccelState *accel = current_accel();
+    ParasyteState *ps;
+    struct parasyte_export_dmabuf exp;
+    int ret;
+
+    if (!accel || !object_dynamic_cast(OBJECT(accel), TYPE_PARASYTE_ACCEL)) {
+        return -1;
+    }
+    ps = PARASYTE_STATE(accel);
+    if (!ps->hostvis_size || ps->hostvis_fd < 0) {
+        return -1;
+    }
+    if (offset + size > ps->hostvis_size || offset + size < offset) {
+        error_report("parasyte: host-visible export out of range "
+                     "(off 0x%" PRIx64 " size 0x%" PRIx64 " win 0x%" PRIx64 ")",
+                     offset, size, ps->hostvis_size);
+        return -1;
+    }
+
+    memset(&exp, 0, sizeof(exp));
+    exp.offset = offset;
+    exp.size = size;
+    exp.fd = -1;
+    ret = ioctl(ps->hostvis_fd, PARASYTE_MEM_IOCTL_EXPORT_DMABUF, &exp);
+    if (ret < 0 || exp.fd < 0) {
+        error_report("parasyte: EXPORT_DMABUF failed: %d (%s)",
+                     ret, strerror(errno));
+        return -1;
+    }
+    return exp.fd;
 }
 
 MemMapEntry *parasyte_hive_queue_entry(ParasyteState* ps)

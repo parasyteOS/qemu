@@ -15,6 +15,7 @@
 #include "qemu/sockets.h"
 #include "hw/qdev-properties.h"
 #include "hw/virtio/virtio-gpu.h"
+#include "system/parasyte.h"
 #include "chardev/char-fe.h"
 #include "qapi/error.h"
 #include "migration/blocker.h"
@@ -34,6 +35,16 @@ typedef enum VhostUserGpuRequest {
     VHOST_USER_GPU_DMABUF_UPDATE,
     VHOST_USER_GPU_GET_EDID,
     VHOST_USER_GPU_DMABUF_SCANOUT2,
+    /*
+     * virgil extension: back-end -> front-end request asking QEMU (the
+     * privileged VMM that owns the parasyte device) to export a dma-buf for a
+     * sub-range of the virtio-gpu host-visible window and return it. This keeps
+     * all parasyte-device access in QEMU so the unprivileged lens/virgil
+     * process never needs the parasyte device. The reply carries the exported
+     * dma-buf fd as socket ancillary data.
+     */
+    VHOST_USER_GPU_RESOURCE_MAP_BLOB = 13,
+    VHOST_USER_GPU_RESOURCE_UNMAP_BLOB = 14,
 } VhostUserGpuRequest;
 
 typedef struct VhostUserGpuDisplayInfoReply {
@@ -90,6 +101,19 @@ typedef struct VhostUserGpuEdidRequest {
     uint32_t scanout_id;
 } QEMU_PACKED VhostUserGpuEdidRequest;
 
+/* virgil ext: request to export/import a host-visible window blob sub-range. */
+typedef struct VhostUserGpuMapBlob {
+    uint32_t resource_id;
+    uint32_t fd_type;      /* VIRGL_RENDERER_BLOB_FD_TYPE_* */
+    uint64_t offset;       /* offset within the host-visible window */
+    uint64_t size;
+} QEMU_PACKED VhostUserGpuMapBlob;
+
+typedef struct VhostUserGpuUnmapBlob {
+    uint32_t resource_id;
+    uint32_t padding;
+} QEMU_PACKED VhostUserGpuUnmapBlob;
+
 typedef struct VhostUserGpuMsg {
     uint32_t request; /* VhostUserGpuRequest */
     uint32_t flags;
@@ -101,6 +125,8 @@ typedef struct VhostUserGpuMsg {
         VhostUserGpuUpdate update;
         VhostUserGpuDMABUFScanout dmabuf_scanout;
         VhostUserGpuDMABUFScanout2 dmabuf_scanout2;
+        VhostUserGpuMapBlob map_blob;
+        VhostUserGpuUnmapBlob unmap_blob;
         VhostUserGpuEdidRequest edid_req;
         struct virtio_gpu_resp_edid resp_edid;
         struct virtio_gpu_resp_display_info display_info;
@@ -152,6 +178,17 @@ vhost_user_gpu_handle_cursor(VhostUserGPU *g, VhostUserGpuMsg *msg)
 static void
 vhost_user_gpu_send_msg(VhostUserGPU *g, const VhostUserGpuMsg *msg)
 {
+    qemu_chr_fe_write(&g->vhost_chr, (uint8_t *)msg,
+                      VHOST_USER_GPU_HDR_SIZE + msg->size);
+}
+
+/* Reply to the back-end, passing a single fd (or none if fd < 0). */
+static void
+vhost_user_gpu_send_msg_fd(VhostUserGPU *g, const VhostUserGpuMsg *msg, int fd)
+{
+    if (fd >= 0) {
+        qemu_chr_fe_set_msgfds(&g->vhost_chr, &fd, 1);
+    }
     qemu_chr_fe_write(&g->vhost_chr, (uint8_t *)msg,
                       VHOST_USER_GPU_HDR_SIZE + msg->size);
 }
@@ -344,6 +381,26 @@ vhost_user_gpu_handle_display(VhostUserGPU *g, VhostUserGpuMsg *msg)
         break;
     }
 #endif
+    case VHOST_USER_GPU_RESOURCE_MAP_BLOB: {
+        VhostUserGpuMapBlob *mb = &msg->payload.map_blob;
+        VhostUserGpuMsg reply = {
+            .request = msg->request,
+            .flags = VHOST_USER_GPU_MSG_FLAG_REPLY,
+            .size = 0,
+        };
+        int fd = parasyte_hostvis_export_dmabuf(mb->offset, mb->size);
+
+        /*
+         * Reply carries the exported dma-buf fd as ancillary data (or none on
+         * failure, which the back-end treats as an error). QEMU drops its own
+         * reference after the fd is handed to the socket.
+         */
+        vhost_user_gpu_send_msg_fd(g, &reply, fd);
+        if (fd >= 0) {
+            close(fd);
+        }
+        break;
+    }
     default:
         g_warning("unhandled message %d %d", msg->request, msg->size);
     }
@@ -614,6 +671,23 @@ vhost_user_gpu_config_change(struct vhost_dev *dev)
     return -1;
 }
 
+static bool
+vhost_user_gpu_get_shm_region(VirtIODevice *vdev, uint8_t id,
+                              struct virtio_shm_region *region)
+{
+    uint64_t base, len;
+
+    if (id != VIRTIO_GPU_SHM_ID_HOST_VISIBLE) {
+        return false;
+    }
+    if (!parasyte_get_hostvis_region(&base, &len)) {
+        return false;
+    }
+    region->addr = base;
+    region->len = len;
+    return true;
+}
+
 static const VhostDevConfigOps config_ops = {
     .vhost_dev_config_notifier = vhost_user_gpu_config_change,
 };
@@ -683,6 +757,7 @@ vhost_user_gpu_class_init(ObjectClass *klass, const void *data)
     vdc->get_config = vhost_user_gpu_get_config;
     vdc->set_config = vhost_user_gpu_set_config;
     vdc->get_vhost = vhost_user_gpu_get_vhost;
+    vdc->get_shm_region = vhost_user_gpu_get_shm_region;
 
     device_class_set_props(dc, vhost_user_gpu_properties);
 }

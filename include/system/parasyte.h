@@ -6,6 +6,14 @@
 
 /* Kernel ABI */
 
+/*
+ * Size of the virtio-gpu host-visible window (VIRTIO_GPU_SHM_ID_HOST_VISIBLE)
+ * carved out of the parasyte CMA pool. Exposed to the guest as a virtio-gpu
+ * SHM region; the guest sub-allocates it via drm_mm and the host GPU imports
+ * matching sub-ranges as dma-bufs. 0 would disable the window.
+ */
+#define PARASYTE_HOSTVIS_SIZE   (256ULL * 1024 * 1024)
+
 #define PARASYTE_MSG_TYPE_IO_REQUEST    0
 #define PARASYTE_MSG_TYPE_SOFTIRQ       1
 
@@ -73,6 +81,12 @@ struct parasyte_alloc_params {
 	__u64 fdt_size;
     int hb_fd;
     __u64 hb_size;
+	/* Input: desired host-visible window size (0 = disabled) */
+	__u64 hostvis_size;
+	/* Output */
+	__u64 hostvis_paddr;
+	int hostvis_fd;
+	__u32 hostvis_pad;
 };
 
 struct parasyte_setup_params {
@@ -90,6 +104,20 @@ struct parasyte_setup_params {
 #define PARASYTE_IOCTL_SHUTDOWN	_IO(PARASYTE_IOCTL_TYPE, 0x03)
 #define PARASYTE_IOCTL_WAIT_MSG _IO(PARASYTE_IOCTL_TYPE, 0x04)
 #define PARASYTE_IOCTL_NOTIFY	_IO(PARASYTE_IOCTL_TYPE, 0x05)
+
+/*
+ * Export a page-aligned [offset, offset+size) sub-range of a parasyte memory
+ * region (e.g. the host-visible window) as a dma-buf. Issued on a parasyte
+ * memory fd (hostvis_fd).
+ */
+struct parasyte_export_dmabuf {
+	__u64 offset;
+	__u64 size;
+	__s32 fd;
+	__u32 pad;
+};
+#define PARASYTE_MEM_IOCTL_EXPORT_DMABUF \
+	_IOWR(PARASYTE_IOCTL_TYPE, 0x10, struct parasyte_export_dmabuf)
 
 /* Macros */
 #define MSG_PENDING(flags) (!!(flags & PARASYTE_MSG_FLAG_PENDING))
@@ -112,6 +140,11 @@ DECLARE_INSTANCE_CHECKER(ParasyteState, PARASYTE_STATE, TYPE_PARASYTE_ACCEL)
 /* Qemu API */
 void parasyte_alloc(ParasyteState* ps, char *cpus, uint64_t ram_size, uint64_t queue_size);
 int parasyte_ram_fd(ParasyteState* ps);
+int parasyte_hostvis_fd(ParasyteState* ps);
+uint64_t parasyte_hostvis_paddr(ParasyteState* ps);
+uint64_t parasyte_hostvis_size(ParasyteState* ps);
+bool parasyte_get_hostvis_region(uint64_t *base, uint64_t *len);
+int parasyte_hostvis_export_dmabuf(uint64_t offset, uint64_t size);
 void *parasyte_ram_ptr(ParasyteState* ps);
 MemMapEntry *parasyte_ram_entry(ParasyteState* ps);
 MemMapEntry *parasyte_hive_queue_entry(ParasyteState* ps);
