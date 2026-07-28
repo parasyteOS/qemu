@@ -17,6 +17,7 @@
 #include "qemu/error-report.h"
 #include "qapi/error.h"
 #include "system/system.h"
+#include "system/parasyte.h"
 #include "hw/virtio/virtio.h"
 #include "hw/virtio/virtio-gpu.h"
 #include "hw/virtio/virtio-gpu-bswap.h"
@@ -182,6 +183,16 @@ static void virtio_gpu_gl_device_unrealize(DeviceState *qdev)
     g_array_unref(g->capset_ids);
 }
 
+bool virtio_gpu_gl_get_shm_region(VirtIODevice *vdev, uint8_t id,
+                                  struct virtio_shm_region *region)
+{
+    if (id != VIRTIO_GPU_SHM_ID_HOST_VISIBLE)
+        return false;
+    if (!parasyte_enabled())
+        return false;
+    return parasyte_get_hostvis_region(&region->addr, &region->len);
+}
+
 static void virtio_gpu_gl_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -197,6 +208,7 @@ static void virtio_gpu_gl_class_init(ObjectClass *klass, const void *data)
     vdc->realize = virtio_gpu_gl_device_realize;
     vdc->unrealize = virtio_gpu_gl_device_unrealize;
     vdc->reset = virtio_gpu_gl_reset;
+    vdc->get_shm_region = virtio_gpu_gl_get_shm_region;
     device_class_set_props(dc, virtio_gpu_gl_properties);
 }
 

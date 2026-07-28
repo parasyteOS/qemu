@@ -22,6 +22,7 @@
 
 #include "ui/egl-helpers.h"
 
+#include "system/parasyte.h"
 #include <virglrenderer.h>
 
 struct virtio_gpu_virgl_resource {
@@ -707,6 +708,9 @@ static void virgl_cmd_resource_create_blob(VirtIOGPU *g,
         }
     }
 
+    if ((cblob.blob_flags & VIRTIO_GPU_BLOB_FLAG_USE_MAPPABLE) && parasyte_enabled())
+        goto insert_res;
+
     virgl_args.res_handle = cblob.resource_id;
     virgl_args.ctx_id = cblob.hdr.ctx_id;
     virgl_args.blob_mem = cblob.blob_mem;
@@ -738,6 +742,7 @@ static void virgl_cmd_resource_create_blob(VirtIOGPU *g,
 
     res->base.dmabuf_fd = info.fd;
 
+insert_res:
     QTAILQ_INSERT_HEAD(&g->reslist, &res->base, next);
     res = NULL;
 }
@@ -761,12 +766,42 @@ static void virgl_cmd_resource_map_blob(VirtIOGPU *g,
         return;
     }
 
+    if (parasyte_enabled()) {
+        struct virgl_renderer_resource_import_blob_args args;
+        int dmabuf_fd;
+
+        if (res->base.dmabuf_fd > 0) goto resp;
+
+        dmabuf_fd = parasyte_hostvis_export_dmabuf(mblob.offset, res->base.blob_size);
+        if (dmabuf_fd < 0) {
+            cmd->error = VIRTIO_GPU_RESP_ERR_UNSPEC;
+            return;
+        }
+
+        args.res_handle = mblob.resource_id;
+        args.blob_mem = VIRGL_RENDERER_BLOB_MEM_HOST3D;
+        args.fd_type = VIRGL_RENDERER_BLOB_FD_TYPE_DMABUF;
+        args.fd = dmabuf_fd;
+        args.size = res->base.blob_size;
+        ret = virgl_renderer_resource_import_blob(&args);
+        if (ret) {
+            qemu_log_mask(LOG_GUEST_ERROR, "%s: resource cannot be imported %d\n",
+                          __func__, mblob.resource_id);
+            close(dmabuf_fd);
+            cmd->error = VIRTIO_GPU_RESP_ERR_UNSPEC;
+            return;
+        }
+        res->base.dmabuf_fd = dmabuf_fd;
+        goto resp;
+    }
+
     ret = virtio_gpu_virgl_map_resource_blob(g, res, mblob.offset);
     if (ret) {
         cmd->error = VIRTIO_GPU_RESP_ERR_UNSPEC;
         return;
     }
 
+resp:
     memset(&resp, 0, sizeof(resp));
     resp.hdr.type = VIRTIO_GPU_RESP_OK_MAP_INFO;
     virgl_renderer_resource_get_map_info(mblob.resource_id, &resp.map_info);
@@ -791,6 +826,8 @@ static void virgl_cmd_resource_unmap_blob(VirtIOGPU *g,
         cmd->error = VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
         return;
     }
+
+    if (parasyte_enabled()) return;
 
     ret = virtio_gpu_virgl_unmap_resource_blob(g, res, cmd_suspended);
     if (ret) {
@@ -1157,6 +1194,9 @@ int virtio_gpu_virgl_init(VirtIOGPU *g)
         flags |= VIRGL_RENDERER_VENUS | VIRGL_RENDERER_RENDER_SERVER;
     }
 #endif
+
+    if (parasyte_enabled())
+        flags |= VIRGL_RENDERER_USE_GUEST_VRAM;
 
     ret = virgl_renderer_init(g, flags, &virtio_gpu_3d_cbs);
     if (ret != 0) {

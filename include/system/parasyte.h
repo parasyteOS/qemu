@@ -74,19 +74,14 @@ struct parasyte_alloc_params {
 	char* cpus;
 	__u64 cpus_len;
 	__u64 ram_size;
+	__u64 hostvis_size;
 	/* Output */
 	int ram_fd;
 	__u64 ram_paddr;
+	int hostvis_fd;
+	__u64 hostvis_paddr;
 	int fdt_fd;
 	__u64 fdt_size;
-    int hb_fd;
-    __u64 hb_size;
-	/* Input: desired host-visible window size (0 = disabled) */
-	__u64 hostvis_size;
-	/* Output */
-	__u64 hostvis_paddr;
-	int hostvis_fd;
-	__u32 hostvis_pad;
 };
 
 struct parasyte_setup_params {
@@ -113,9 +108,9 @@ struct parasyte_setup_params {
 struct parasyte_export_dmabuf {
 	__u64 offset;
 	__u64 size;
-	__s32 fd;
-	__u32 pad;
+	int fd;
 };
+
 #define PARASYTE_MEM_IOCTL_EXPORT_DMABUF \
 	_IOWR(PARASYTE_IOCTL_TYPE, 0x10, struct parasyte_export_dmabuf)
 
@@ -138,11 +133,10 @@ typedef struct ParasyteState ParasyteState;
 DECLARE_INSTANCE_CHECKER(ParasyteState, PARASYTE_STATE, TYPE_PARASYTE_ACCEL)
 
 /* Qemu API */
+extern bool parasyte_allowed;
+#define parasyte_enabled() (parasyte_allowed)
 void parasyte_alloc(ParasyteState* ps, char *cpus, uint64_t ram_size, uint64_t queue_size);
 int parasyte_ram_fd(ParasyteState* ps);
-int parasyte_hostvis_fd(ParasyteState* ps);
-uint64_t parasyte_hostvis_paddr(ParasyteState* ps);
-uint64_t parasyte_hostvis_size(ParasyteState* ps);
 bool parasyte_get_hostvis_region(uint64_t *base, uint64_t *len);
 int parasyte_hostvis_export_dmabuf(uint64_t offset, uint64_t size);
 void *parasyte_ram_ptr(ParasyteState* ps);

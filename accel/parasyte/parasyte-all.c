@@ -25,21 +25,19 @@
 
 bool parasyte_allowed;
 
+struct ParasyteMem {
+    int fd;
+    void *ptr;
+    MemMapEntry entry;
+};
+
 struct ParasyteState {
     AccelState parent_obj;
     int dev_fd;
 
-    int hb_fd;
-    void *hb;
-    int ram_fd;
-    void *ram;
-    int fdt_fd;
-    void *fdt;
-    __u64 fdt_size;
-    int hostvis_fd;
-    __u64 hostvis_paddr;
-    __u64 hostvis_size;
-    MemMapEntry ram_entry;
+    struct ParasyteMem ram;
+    struct ParasyteMem fdt;
+    struct ParasyteMem hostvis;
     MemMapEntry hive_queue_entry;
     MemMapEntry spore_queue_entry;
     MemMapEntry flags_entry;
@@ -51,14 +49,13 @@ struct ParasyteState {
 
     bool running;
     QemuThread *io_thread;
-    QemuThread *hb_thread;
 };
 
 static void *map_physmem(ParasyteState *ps, __u64 phys_addr)
 {
-    if (phys_addr < ps->ram_entry.base || phys_addr >= ps->ram_entry.base + ps->ram_entry.size)
+    if (phys_addr < ps->ram.entry.base || phys_addr >= ps->ram.entry.base + ps->ram.entry.size)
         return NULL;
-    return ps->ram + (phys_addr - ps->ram_entry.base);
+    return ps->ram.entry.ptr + (phys_addr - ps->ram.entry.base);
 }
 
 static inline void send_notify(ParasyteState* ps, uint32_t cpu)
@@ -258,9 +255,9 @@ static void parasyte_setup_post(AccelState *as)
     ParasyteState *ps = PARASYTE_STATE(as);
     struct parasyte_setup_params setup_params = {
         .kimage_offset = ps->kimage_offset,
-        .flags_offset = ps->flags_entry.base - ps->ram_entry.base,
-        .hive_queue_offset = ps->hive_queue_entry.base - ps->ram_entry.base,
-        .spore_queue_offset = ps->spore_queue_entry.base - ps->ram_entry.base,
+        .flags_offset = ps->flags_entry.base - ps->ram.entry.base,
+        .hive_queue_offset = ps->hive_queue_entry.base - ps->ram.entry.base,
+        .spore_queue_offset = ps->spore_queue_entry.base - ps->ram.entry.base,
     };
 
     if (ioctl(ps->dev_fd, PARASYTE_IOCTL_SETUP, &setup_params) < 0) {
@@ -341,6 +338,18 @@ static void parasyte_type_init(void)
 }
 type_init(parasyte_type_init);
 
+static void map_mem(struct ParasyteMem *mem, int fd, hwaddr base, hwaddr size)
+{
+    mem->fd = fd;
+    mem->ptr = mmap(NULL, ram_size, PROT_READ|PROT_WRITE, MAP_SHARED, alloc_params.ram_fd, 0);
+    if (mem->ptr == MAP_FAILED) {
+        error_report("Mmap mem entry failed: %d", errno);
+        exit(1);
+    }
+    mem->entry.base = base;
+    mem->entry.size = size;
+}
+
 void parasyte_alloc(ParasyteState* ps, char *cpus, uint64_t ram_size, uint64_t queue_capacity)
 {
     hwaddr kimage_addr;
@@ -358,38 +367,13 @@ void parasyte_alloc(ParasyteState* ps, char *cpus, uint64_t ram_size, uint64_t q
         exit(1);
     }
 
-    ps->hb_fd = alloc_params.hb_fd;
-    ps->hb = mmap(NULL, alloc_params.hb_size, PROT_READ|PROT_WRITE, MAP_SHARED, alloc_params.hb_fd, 0);
-    if (ps->hb == MAP_FAILED) {
-        error_report("Mmap hb failed: %d", errno);
-        exit(1);
-    }
+    map_mem(&ps->ram, alloc_params.ram_fd, alloc_params.ram_paddr, ram_size);
+    map_mem(&ps->fdt, alloc_params.fdt_fd, 0, alloc_params.fdt_size);
+    map_mem(&ps->hostvis, alloc_params.hostvis_fd, alloc_params.hostvis_paddr, alloc_params.hostvis_size);
 
-    ps->ram_fd = alloc_params.ram_fd;
-    ps->ram = mmap(NULL, ram_size, PROT_READ|PROT_WRITE, MAP_SHARED, alloc_params.ram_fd, 0);
-    if (ps->ram == MAP_FAILED) {
-        error_report("Mmap ram failed: %d", errno);
-        exit(1);
-    }
-
-    ps->fdt_fd = alloc_params.fdt_fd;
-    ps->fdt = mmap(NULL, alloc_params.fdt_size, PROT_READ|PROT_WRITE, MAP_SHARED, alloc_params.fdt_fd, 0);
-    if (ps->fdt == MAP_FAILED) {
-        error_report("Mmap fdt failed: %d", errno);
-        exit(1);
-    }
-    ps->fdt_size = alloc_params.fdt_size;
-
-    ps->hostvis_fd = alloc_params.hostvis_fd;
-    ps->hostvis_paddr = alloc_params.hostvis_paddr;
-    ps->hostvis_size = alloc_params.hostvis_size;
-
-    ps->ram_entry.base = alloc_params.ram_paddr;
-    ps->ram_entry.size = ram_size;
-
-    ps->hive_queue_entry.base = ps->ram_entry.base;
+    ps->hive_queue_entry.base = ps->ram.entry.base;
     ps->hive_queue_entry.size = PARASYTE_MSG_QSIZE(queue_capacity);
-    ps->producing_queue = ps->ram;
+    ps->producing_queue = ps->ram.entry.ptr;
     qatomic_set(&ps->producing_queue->producer_head, 0);
     qatomic_set(&ps->producing_queue->consumer_head, 0);
     qatomic_set(&ps->producing_queue->tail, 0);
@@ -397,7 +381,7 @@ void parasyte_alloc(ParasyteState* ps, char *cpus, uint64_t ram_size, uint64_t q
 
     ps->spore_queue_entry.base = ps->hive_queue_entry.base + ps->hive_queue_entry.size;
     ps->spore_queue_entry.size = PARASYTE_MSG_QSIZE(queue_capacity);
-    ps->consuming_queue = ps->ram + ps->hive_queue_entry.size;
+    ps->consuming_queue = ps->ram.entry.ptr + ps->hive_queue_entry.size;
     qatomic_set(&ps->consuming_queue->producer_head, 0);
     qatomic_set(&ps->consuming_queue->consumer_head, 0);
     qatomic_set(&ps->consuming_queue->tail, 0);
@@ -408,37 +392,22 @@ void parasyte_alloc(ParasyteState* ps, char *cpus, uint64_t ram_size, uint64_t q
 
 #define SZ_2M   0x00200000
     kimage_addr = ROUND_UP(ps->spore_queue_entry.base + ps->spore_queue_entry.size, SZ_2M);
-    ps->kimage_offset = kimage_addr - ps->ram_entry.base;
+    ps->kimage_offset = kimage_addr - ps->ram.entry.base;
 }
 
 MemMapEntry *parasyte_ram_entry(ParasyteState* ps)
 {
-    return &ps->ram_entry;
+    return &ps->ram.entry;
 }
 
 void *parasyte_ram_ptr(ParasyteState* ps)
 {
-    return ps->ram;
+    return ps->ram.ptr;
 }
 
 int parasyte_ram_fd(ParasyteState* ps)
 {
-    return ps->ram_fd;
-}
-
-int parasyte_hostvis_fd(ParasyteState* ps)
-{
-    return ps->hostvis_fd;
-}
-
-uint64_t parasyte_hostvis_paddr(ParasyteState* ps)
-{
-    return ps->hostvis_paddr;
-}
-
-uint64_t parasyte_hostvis_size(ParasyteState* ps)
-{
-    return ps->hostvis_size;
+    return ps->ram.fd;
 }
 
 /*
@@ -448,18 +417,19 @@ uint64_t parasyte_hostvis_size(ParasyteState* ps)
  */
 bool parasyte_get_hostvis_region(uint64_t *base, uint64_t *len)
 {
-    AccelState *accel = current_accel();
     ParasyteState *ps;
 
-    if (!accel || !object_dynamic_cast(OBJECT(accel), TYPE_PARASYTE_ACCEL)) {
+    if (!parasyte_enabled()) {
         return false;
     }
-    ps = PARASYTE_STATE(accel);
-    if (!ps->hostvis_size) {
+
+    ps = PARASYTE_STATE(current_accel());
+    if (!ps->hostvis.entry.size) {
         return false;
     }
-    *base = ps->hostvis_paddr;
-    *len = ps->hostvis_size;
+
+    *base = ps->hostvis.entry.base;
+    *len = ps->hostvis.entry.size;
     return true;
 }
 
@@ -473,22 +443,21 @@ bool parasyte_get_hostvis_region(uint64_t *base, uint64_t *len)
  */
 int parasyte_hostvis_export_dmabuf(uint64_t offset, uint64_t size)
 {
-    AccelState *accel = current_accel();
     ParasyteState *ps;
     struct parasyte_export_dmabuf exp;
     int ret;
 
-    if (!accel || !object_dynamic_cast(OBJECT(accel), TYPE_PARASYTE_ACCEL)) {
+    if (!parasyte_enabled()) {
         return -1;
     }
-    ps = PARASYTE_STATE(accel);
-    if (!ps->hostvis_size || ps->hostvis_fd < 0) {
+    ps = PARASYTE_STATE(current_accel());
+    if (!ps->hostvis.entry.size || ps->hostvis.fd < 0) {
         return -1;
     }
-    if (offset + size > ps->hostvis_size || offset + size < offset) {
+    if (offset + size > ps->hostvis.entry.size || offset + size < offset) {
         error_report("parasyte: host-visible export out of range "
                      "(off 0x%" PRIx64 " size 0x%" PRIx64 " win 0x%" PRIx64 ")",
-                     offset, size, ps->hostvis_size);
+                     offset, size, ps->hostvis.entry.size);
         return -1;
     }
 
@@ -496,7 +465,7 @@ int parasyte_hostvis_export_dmabuf(uint64_t offset, uint64_t size)
     exp.offset = offset;
     exp.size = size;
     exp.fd = -1;
-    ret = ioctl(ps->hostvis_fd, PARASYTE_MEM_IOCTL_EXPORT_DMABUF, &exp);
+    ret = ioctl(ps->hostvis.fd, PARASYTE_MEM_IOCTL_EXPORT_DMABUF, &exp);
     if (ret < 0 || exp.fd < 0) {
         error_report("parasyte: EXPORT_DMABUF failed: %d (%s)",
                      ret, strerror(errno));
