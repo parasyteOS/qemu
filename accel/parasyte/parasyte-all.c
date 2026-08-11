@@ -464,6 +464,7 @@ int parasyte_hostvis_export_dmabuf(uint64_t offset, uint64_t size)
     memset(&exp, 0, sizeof(exp));
     exp.offset = offset;
     exp.size = size;
+    exp.flags = O_RDWR;
     exp.fd = -1;
     ret = ioctl(ps->hostvis.fd, PARASYTE_MEM_IOCTL_EXPORT_DMABUF, &exp);
     if (ret < 0 || exp.fd < 0) {

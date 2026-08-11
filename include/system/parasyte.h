@@ -108,6 +108,7 @@ struct parasyte_setup_params {
 struct parasyte_export_dmabuf {
 	__u64 offset;
 	__u64 size;
+    int flags;
 	int fd;
 };
 

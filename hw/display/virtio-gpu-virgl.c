@@ -28,6 +28,9 @@
 struct virtio_gpu_virgl_resource {
     struct virtio_gpu_simple_resource base;
     MemoryRegion *mr;
+    bool guest_vram;
+    uint32_t fd_type;
+    bool mapped;
 };
 
 static struct virtio_gpu_virgl_resource *
@@ -110,6 +113,48 @@ virtio_gpu_virgl_map_resource_blob(VirtIOGPU *g,
         return -EOPNOTSUPP;
     }
 
+    if (parasyte_enabled()) {
+        struct virgl_renderer_resource_import_blob_args args;
+        int dmabuf_fd;
+
+        if (!res->guest_vram) {
+            qemu_log_mask(LOG_GUEST_ERROR, "%s: mapping %d which is not guest vram\n",
+                          __func__, res->base.resource_id);
+            return -EOPNOTSUPP;
+        }
+
+        if (res->mapped)
+            return 0;
+
+        dmabuf_fd = parasyte_hostvis_export_dmabuf(offset, res->base.blob_size);
+        if (dmabuf_fd < 0)
+            return -ENOMEM;
+
+        args.res_handle = res->base.resource_id;
+        args.blob_mem = VIRGL_RENDERER_BLOB_MEM_HOST3D;
+        args.fd_type = res->fd_type;
+        args.fd = dmabuf_fd;
+        args.size = res->base.blob_size;
+        ret = virgl_renderer_resource_import_blob(&args);
+        if (ret) {
+            qemu_log_mask(LOG_GUEST_ERROR, "%s: resource cannot be imported %d\n",
+                          __func__, res->base.resource_id);
+            close(dmabuf_fd);
+            return ret;
+        }
+        ret = virgl_renderer_resource_map(res->base.resource_id, &data, &size);
+        if (ret) {
+            qemu_log_mask(LOG_GUEST_ERROR, "%s: resource cannot be mapped %d: %s\n",
+                          __func__, res->base.resource_id, strerror(-ret));
+            close(dmabuf_fd);
+            return ret;
+        }
+
+        res->base.dmabuf_fd = dmabuf_fd;
+        res->mapped = true;
+        return 0;
+    }
+
     ret = virgl_renderer_resource_map(res->base.resource_id, &data, &size);
     if (ret) {
         qemu_log_mask(LOG_GUEST_ERROR, "%s: failed to map virgl resource: %s\n",
@@ -147,6 +192,20 @@ virtio_gpu_virgl_unmap_resource_blob(VirtIOGPU *g,
     VirtIOGPUBase *b = VIRTIO_GPU_BASE(g);
     MemoryRegion *mr = res->mr;
     int ret;
+
+    if (res->guest_vram && parasyte_enabled()) {
+        ret = virgl_renderer_resource_unmap(res->base.resource_id);
+        if (ret) {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "%s: failed to unmap virgl resource: %s\n",
+                          __func__, strerror(-ret));
+            return ret;
+        }
+        res->mapped = false;
+        close(res->base.dmabuf_fd);
+        res->base.dmabuf_fd = -1;
+        return 0;
+    }
 
     if (!mr) {
         return 0;
@@ -698,6 +757,14 @@ static void virgl_cmd_resource_create_blob(VirtIOGPU *g,
     res->base.blob_size = cblob.size;
     res->base.dmabuf_fd = -1;
 
+    if (cblob.blob_mem == VIRTIO_GPU_BLOB_MEM_HOST3D &&
+        (cblob.blob_flags & VIRTIO_GPU_BLOB_FLAG_USE_MAPPABLE != 0) &&
+        parasyte_enabled()) {
+        res->guest_vram = true;
+        res->fd_type = cblob.blob_id == 0 ? VIRGL_RENDERER_BLOB_FD_TYPE_SHM : VIRGL_RENDERER_BLOB_FD_TYPE_DMABUF;
+        goto insert_res;
+    }
+
     if (cblob.blob_mem != VIRTIO_GPU_BLOB_MEM_HOST3D) {
         ret = virtio_gpu_create_mapping_iov(g, cblob.nr_entries, sizeof(cblob),
                                             cmd, &res->base.addrs,
@@ -707,9 +774,6 @@ static void virgl_cmd_resource_create_blob(VirtIOGPU *g,
             return;
         }
     }
-
-    if ((cblob.blob_flags & VIRTIO_GPU_BLOB_FLAG_USE_MAPPABLE) && parasyte_enabled())
-        goto insert_res;
 
     virgl_args.res_handle = cblob.resource_id;
     virgl_args.ctx_id = cblob.hdr.ctx_id;
@@ -766,35 +830,6 @@ static void virgl_cmd_resource_map_blob(VirtIOGPU *g,
         return;
     }
 
-    if (parasyte_enabled()) {
-        struct virgl_renderer_resource_import_blob_args args;
-        int dmabuf_fd;
-
-        if (res->base.dmabuf_fd > 0) goto resp;
-
-        dmabuf_fd = parasyte_hostvis_export_dmabuf(mblob.offset, res->base.blob_size);
-        if (dmabuf_fd < 0) {
-            cmd->error = VIRTIO_GPU_RESP_ERR_UNSPEC;
-            return;
-        }
-
-        args.res_handle = mblob.resource_id;
-        args.blob_mem = VIRGL_RENDERER_BLOB_MEM_HOST3D;
-        args.fd_type = VIRGL_RENDERER_BLOB_FD_TYPE_DMABUF;
-        args.fd = dmabuf_fd;
-        args.size = res->base.blob_size;
-        ret = virgl_renderer_resource_import_blob(&args);
-        if (ret) {
-            qemu_log_mask(LOG_GUEST_ERROR, "%s: resource cannot be imported %d\n",
-                          __func__, mblob.resource_id);
-            close(dmabuf_fd);
-            cmd->error = VIRTIO_GPU_RESP_ERR_UNSPEC;
-            return;
-        }
-        res->base.dmabuf_fd = dmabuf_fd;
-        goto resp;
-    }
-
     ret = virtio_gpu_virgl_map_resource_blob(g, res, mblob.offset);
     if (ret) {
         cmd->error = VIRTIO_GPU_RESP_ERR_UNSPEC;
@@ -826,8 +861,6 @@ static void virgl_cmd_resource_unmap_blob(VirtIOGPU *g,
         cmd->error = VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
         return;
     }
-
-    if (parasyte_enabled()) return;
 
     ret = virtio_gpu_virgl_unmap_resource_blob(g, res, cmd_suspended);
     if (ret) {
